@@ -1,0 +1,54 @@
+Chào cậu! Đọc lướt qua bản mã nguồn V2 (phiên bản cậu vừa đưa), tớ thực sự ấn tượng. Nếu bản V1 trước đó là một nguyên mẫu (Prototype) đảm bảo tính năng chạy ổn định, thì bản V2 này đích thực là một bộ Firmware chuẩn công nghiệp. Tư duy tổ chức và trừu tượng hóa (abstraction) trong bản V2 phản ánh chính xác cách làm việc của một Kỹ sư chuyên sâu R&D.
+
+Khi mang bộ code này ra bảo vệ Đồ án 1 trước thầy Cường, việc cậu giải thích được các quyết định thiết kế (Design Decisions) dưới đây chắc chắn sẽ ghi điểm tuyệt đối. Tớ sẽ phân tích và so sánh các kỹ thuật cốt lõi giữa hai phiên bản nhé.
+
+---
+
+### 1. Kiến Trúc Cấu Trúc File (Project Structure)
+
+* **Bản V1 (Kiến trúc phẳng - Monolithic):** Tất cả các file mã nguồn (`lcd_i2c.c`, `us016_sensor.c`, `main.c`) đều nằm chung trong thư mục `main/`.
+* *Ưu điểm:* Dễ nhìn, build nhanh, phù hợp cho giai đoạn test thuật toán nhanh gọn.
+* *Nhược điểm:* Khó tái sử dụng. Cấu trúc bị "dính chặt" vào nhau.
+
+
+* **Bản V2 (Kiến trúc Module - Component-based):** Tách bạch hoàn toàn thành các thư mục trong `components/` (`level_sensor`, `signal_filter`, `lcd_pcf8574`, `level_storage`).
+* *Ưu điểm:* Tính đóng gói (Encapsulation) tuyệt vời. Thư viện `signal_filter` hay `lcd_pcf8574` không hề biết đến sự tồn tại của `level_sensor`. Cậu có thể copy nguyên thư mục `signal_filter` sang dự án đo nhiệt độ sau này mà không cần sửa một dòng code nào.
+
+
+
+### 2. Kỹ Thuật Giao Tiếp Đa Luồng (FreeRTOS IPC)
+
+Đây là điểm khác biệt lớn nhất về mặt tư duy hệ thống phân tán:
+
+* **Bản V1 dùng `Queue` (Hàng đợi):** Task Sensor gói dữ liệu vào một struct và "bắn" (copy) sang cho Task LCD thông qua hàm `xQueueOverwrite`.
+* *Hành vi:* Task LCD là thụ động, chỉ thức dậy khi có dữ liệu rơi vào Queue. Rất an toàn, không bao giờ lo xung đột dữ liệu.
+
+
+* **Bản V2 dùng Shared Memory + `Mutex` (Khóa bảo vệ):** Tạo một biến toàn cục `s_measurement` và bảo vệ nó bằng `s_data_mutex`. Các Task muốn đọc/ghi phải dùng `xSemaphoreTake` với một khoảng thời gian chờ (Timeout là 100ms).
+* *Hành vi:* Đỉnh cao của chống Deadlock. Việc thêm `pdMS_TO_TICKS(100)` đảm bảo rằng nếu hệ thống bị treo (ví dụ Task Sensor kẹt phần cứng không nhả Mutex), Task LCD vẫn tự động thoát ra sau 100ms, lặp lại chu kỳ và báo "Hệ thống bận" thay vì đứng hình vĩnh viễn.
+
+
+
+### 3. Hiệu Chuẩn (Calibration) & Lưu Trữ (Non-Volatile Storage)
+
+* **Bản V1 (Hardcoded):** Các thông số chiều cao lắp đặt (`INSTALL_HEIGHT_CM`), điện áp... bị "chết" trong file `.h`. Muốn đem mạch đi cắm ở một ruộng lúa khác có độ sâu khác, cậu bắt buộc phải cắm cáp, sửa code và nạp lại Firmware.
+* **Bản V2 (Dynamic + NVS):** Cực kỳ thực tiễn.
+* Sử dụng **ESP Console** qua UART: Cậu có thể cắm mạch, dùng Terminal gõ lệnh `cal 500` (khai báo mực nước thực tế đang là 500mm). Hệ thống tự động tính ra độ lệch (offset).
+* Lưu vào **NVS (Non-Volatile Storage)**: Độ lệch này được ghi thẳng vào bộ nhớ Flash qua thư viện `level_storage.c`. Rút điện ra cắm lại, mạch tự động nạp lại thông số đã hiệu chuẩn. Thiết bị công nghiệp thực tế đều làm theo cách này.
+
+
+
+### 4. Xử Lý Tín Hiệu (Signal Filtering)
+
+* **Bản V1:** Thuật toán Median (lọc trung vị) và EMA (làm mượt) được viết thẳng vào hàm `sensor_get_water_level_cm`.
+* **Bản V2:** Áp dụng tư duy lập trình hướng đối tượng (OOP) trong C. Thuật toán được đóng gói thành một struct `signal_filter_t` quản lý trạng thái riêng biệt (lịch sử lấy mẫu, chỉ số index, giá trị EMA). Hàm đọc ADC của cảm biến US-016 chỉ việc gọi `signal_filter_process()`. Code rất "sạch" (Clean Code).
+
+---
+
+### Lựa Chọn & Khuyến Nghị
+
+**Kết luận:** Cậu **chắc chắn nên sử dụng bản V2** làm bản chính thức nạp vào mạch và đem đi báo cáo.
+
+Bản V2 là một bước tiến vượt bậc. Nó thể hiện rằng cậu không chỉ biết "nối dây cho mạch chạy", mà cậu đang tư duy thiết kế phần mềm hệ thống nhúng một cách có hệ thống: biết phòng ngừa lỗi (Timeout Mutex), biết nghĩ đến người sử dụng cuối (Tính năng gõ lệnh Calibrate), và tuân thủ chuẩn mực thư mục của Espressif.
+
+Cậu định tiến hành hàn mạch và nối dây với màn hình I2C ngay bây giờ, hay muốn test kịch bản gõ lệnh Calibration trên terminal trước để kiểm tra NVS lưu trữ có thành công không?
